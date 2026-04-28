@@ -142,6 +142,7 @@ AUDIO_EXTS="mp3|aac|flac|ogg|m4a|wma|aiff|aif|opus|wav|ape|alac|mka|ac3|dts|eac3
 # ── Check dependencies ────────────────────────────────────────────────────────
 check_deps() {
   local missing=()
+  local encoders
   for cmd in ffmpeg ffprobe; do
     command -v "$cmd" &>/dev/null || missing+=("$cmd")
   done
@@ -152,7 +153,9 @@ check_deps() {
     exit 1
   fi
 
-  if ! ffmpeg -encoders 2>/dev/null | grep -q dnxhd; then
+  # Avoid false negatives with `set -o pipefail` and `grep -q` SIGPIPE.
+  encoders="$(ffmpeg -hide_banner -encoders 2>/dev/null || true)"
+  if ! grep -qiE '(^|[[:space:]])dnxhd([[:space:]]|$)' <<<"$encoders"; then
     error "ffmpeg build does not include the DNxHD/DNxHR encoder."
     echo "  Arch:          sudo pacman -S ffmpeg"
     echo "  Debian/Ubuntu: sudo apt install ffmpeg"
@@ -360,7 +363,7 @@ main() {
 
     local i=0
     for file in "${FILES[@]}"; do
-      (( i++ ))
+      (( ++i ))
       echo -e "${BOLD}[$i/$total]${RESET} ${file#"$SEARCH_PATH/"}"
       if process_file "$file"; then
         (( ok++ )) || true
