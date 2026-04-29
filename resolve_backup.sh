@@ -7,7 +7,7 @@
 #    - ~/.local/share/DaVinciResolve
 #    - ~/.config/Blackmagic Design/DaVinci Resolve
 #    - ~/.local/share/BlackmagicDesign/DaVinci Resolve
-#    - System and user fonts/fontconfig paths
+#    - User and custom font paths (no packaged system fonts by default)
 #
 #  Excludes from /opt/resolve backup:
 #    - plugins
@@ -47,7 +47,7 @@ SOURCE_HOME="${HOME}"
 OPT_PATH="/opt/resolve"
 ARCHIVE_NAME=""
 SELF_TEST=false
-INCLUDE_SYSTEM_FONTS=true
+INCLUDE_SYSTEM_FONTS=false
 RESTORE_ARCHIVE=""
 RESTORE_HOME_DIR="${HOME}"
 RESTORE_OPT_DIR="/opt"
@@ -90,7 +90,8 @@ ${BOLD}OPTIONS${RESET}
       --restore-opt DIR   Restore opt payload into DIR (default: /opt)
       --restore-root DIR  Restore system payload into DIR (default: /)
       --self-test         Run built-in end-to-end test and exit
-      --no-system-fonts   Skip system font paths (/usr/share/fonts, etc.)
+      --include-system-fonts Include packaged system font paths (/usr/share/fonts, /etc/fonts)
+      --no-system-fonts   Alias for default behavior (custom/user fonts only)
       --no-color          Disable color output
   -h, --help              Show help
 
@@ -169,6 +170,10 @@ while [[ $# -gt 0 ]]; do
       SELF_TEST=true
       shift
       ;;
+    --include-system-fonts)
+      INCLUDE_SYSTEM_FONTS=true
+      shift
+      ;;
     --no-system-fonts)
       INCLUDE_SYSTEM_FONTS=false
       shift
@@ -221,10 +226,11 @@ build_candidate_paths() {
   out_ref+=("$SOURCE_HOME/.config/Blackmagic Design/DaVinci Resolve")
   out_ref+=("$SOURCE_HOME/.local/share/BlackmagicDesign/DaVinci Resolve")
 
-  # Fonts required by titles/plugins/transitions and typography-heavy templates
+  # Fonts required by titles/plugins/transitions and typography-heavy templates.
+  # Default: only user/custom fonts to avoid backing up distro-provided font sets.
+  out_ref+=("/usr/local/share/fonts")
   if $INCLUDE_SYSTEM_FONTS; then
     out_ref+=("/usr/share/fonts")
-    out_ref+=("/usr/local/share/fonts")
     out_ref+=("/etc/fonts")
   fi
   out_ref+=("$SOURCE_HOME/.local/share/fonts")
@@ -523,7 +529,7 @@ main() {
   info "Source home : $SOURCE_HOME"
   info "Resolve path: $OPT_PATH"
   info "Output dir  : $OUTPUT_DIR"
-  info "Sys fonts   : $INCLUDE_SYSTEM_FONTS"
+  info "Pkg fonts   : $INCLUDE_SYSTEM_FONTS"
 
   if [[ ${#includes[@]} -eq 0 ]]; then
     error "No Resolve paths found to back up"
