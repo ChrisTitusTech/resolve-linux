@@ -26,9 +26,13 @@
 #    -o, --output-dir DIR    Where the archive should be written (default: .)
 #    -n, --dry-run           Show what would be backed up, do not create archive
 #    -t, --test-archive      Verify archive readability after creation
+#    -r, --restore FILE      Restore from FILE (.tar.gz archive)
 #        --source-home DIR   Home directory to scan (default: $HOME)
 #        --opt-path DIR      Resolve install path (default: /opt/resolve)
 #        --archive-name NAME Override archive file name prefix
+#        --restore-home DIR  Restore home payload into DIR (default: $HOME)
+#        --restore-opt DIR   Restore opt payload into DIR (default: /opt)
+#        --restore-root DIR  Restore system payload into DIR (default: /)
 #        --self-test         Run built-in end-to-end test and exit
 #        --no-color          Disable color output
 #    -h, --help              Show help
@@ -44,6 +48,10 @@ OPT_PATH="/opt/resolve"
 ARCHIVE_NAME=""
 SELF_TEST=false
 INCLUDE_SYSTEM_FONTS=true
+RESTORE_ARCHIVE=""
+RESTORE_HOME_DIR="${HOME}"
+RESTORE_OPT_DIR="/opt"
+RESTORE_ROOT_DIR="/"
 USE_COLOR=true
 
 if [[ ! -t 1 ]]; then
@@ -74,11 +82,15 @@ ${BOLD}OPTIONS${RESET}
   -o, --output-dir DIR    Where the archive should be written (default: .)
   -n, --dry-run           Show what would be backed up, do not create archive
   -t, --test-archive      Verify archive readability after creation (default: on)
+  -r, --restore FILE      Restore from FILE (.tar.gz archive)
       --source-home DIR   Home directory to scan (default: $HOME)
       --opt-path DIR      Resolve install path (default: /opt/resolve)
       --archive-name NAME Override archive file name prefix
+      --restore-home DIR  Restore home payload into DIR (default: $HOME)
+      --restore-opt DIR   Restore opt payload into DIR (default: /opt)
+      --restore-root DIR  Restore system payload into DIR (default: /)
       --self-test         Run built-in end-to-end test and exit
-        --no-system-fonts  Skip system font paths (/usr/share/fonts, etc.)
+      --no-system-fonts   Skip system font paths (/usr/share/fonts, etc.)
       --no-color          Disable color output
   -h, --help              Show help
 
@@ -87,6 +99,8 @@ ${BOLD}EXAMPLES${RESET}
   $0 --output-dir ~/backups
   $0 --dry-run
   $0 --source-home /home/alex --opt-path /opt/resolve
+  $0 --restore inputfile.tar.gz
+  $0 --restore inputfile.tar.gz --restore-home /home/alex
 
 ${BOLD}RESTORE${RESET}
   mkdir -p /tmp/resolve-restore
@@ -116,6 +130,11 @@ while [[ $# -gt 0 ]]; do
       TEST_ARCHIVE=true
       shift
       ;;
+    -r|--restore)
+      RESTORE_ARCHIVE="${2:-}"
+      [[ -n "$RESTORE_ARCHIVE" ]] || { error "--restore requires a value"; exit 1; }
+      shift 2
+      ;;
     --source-home)
       SOURCE_HOME="${2:-}"
       [[ -n "$SOURCE_HOME" ]] || { error "--source-home requires a value"; exit 1; }
@@ -129,6 +148,21 @@ while [[ $# -gt 0 ]]; do
     --archive-name)
       ARCHIVE_NAME="${2:-}"
       [[ -n "$ARCHIVE_NAME" ]] || { error "--archive-name requires a value"; exit 1; }
+      shift 2
+      ;;
+    --restore-home)
+      RESTORE_HOME_DIR="${2:-}"
+      [[ -n "$RESTORE_HOME_DIR" ]] || { error "--restore-home requires a value"; exit 1; }
+      shift 2
+      ;;
+    --restore-opt)
+      RESTORE_OPT_DIR="${2:-}"
+      [[ -n "$RESTORE_OPT_DIR" ]] || { error "--restore-opt requires a value"; exit 1; }
+      shift 2
+      ;;
+    --restore-root)
+      RESTORE_ROOT_DIR="${2:-}"
+      [[ -n "$RESTORE_ROOT_DIR" ]] || { error "--restore-root requires a value"; exit 1; }
       shift 2
       ;;
     --self-test)
@@ -328,6 +362,82 @@ verify_archive() {
   fi
 }
 
+run_copy() {
+  local src="$1"
+  local dest="$2"
+
+  if [[ -w "$dest" ]]; then
+    rsync -a "$src" "$dest"
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo rsync -a "$src" "$dest"
+    return
+  fi
+
+  error "Insufficient permissions for: $dest"
+  error "Run as root or install/configure sudo."
+  exit 1
+}
+
+restore_archive() {
+  local archive_path="$1"
+  archive_path="$(canon_path "$archive_path")"
+
+  [[ -f "$archive_path" ]] || { error "Restore archive not found: $archive_path"; exit 1; }
+
+  RESTORE_HOME_DIR="$(canon_path "$RESTORE_HOME_DIR")"
+  RESTORE_OPT_DIR="$(canon_path "$RESTORE_OPT_DIR")"
+  RESTORE_ROOT_DIR="$(canon_path "$RESTORE_ROOT_DIR")"
+
+  command -v tar >/dev/null 2>&1 || { error "Missing required tool: tar"; exit 1; }
+  command -v rsync >/dev/null 2>&1 || { error "Missing required tool: rsync"; exit 1; }
+
+  header "=== resolve_backup.sh (restore) ==="
+  info "Archive      : $archive_path"
+  info "Restore home : $RESTORE_HOME_DIR"
+  info "Restore opt  : $RESTORE_OPT_DIR"
+  info "Restore root : $RESTORE_ROOT_DIR"
+
+  local stage_dir
+  stage_dir="$(mktemp -d)"
+  trap 'rm -rf "${stage_dir:-}"' EXIT
+
+  header "Extracting archive"
+  tar -xzf "$archive_path" -C "$stage_dir"
+  [[ -d "$stage_dir/payload" ]] || { error "Invalid archive: payload/ directory missing"; exit 1; }
+
+  if [[ -d "$stage_dir/payload/opt" ]]; then
+    info "Restoring payload/opt -> $RESTORE_OPT_DIR"
+    ensure_dir "$RESTORE_OPT_DIR"
+    run_copy "$stage_dir/payload/opt/" "$RESTORE_OPT_DIR/"
+  fi
+
+  if [[ -d "$stage_dir/payload/system" ]]; then
+    info "Restoring payload/system -> $RESTORE_ROOT_DIR"
+    ensure_dir "$RESTORE_ROOT_DIR"
+    run_copy "$stage_dir/payload/system/" "$RESTORE_ROOT_DIR/"
+  fi
+
+  if [[ -d "$stage_dir/payload/home" ]]; then
+    local source_home_dir
+    source_home_dir="$(find "$stage_dir/payload/home" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)"
+    if [[ -n "$source_home_dir" ]]; then
+      info "Restoring payload/home -> $RESTORE_HOME_DIR"
+      ensure_dir "$RESTORE_HOME_DIR"
+      run_copy "$source_home_dir/" "$RESTORE_HOME_DIR/"
+    else
+      warn "payload/home exists but no user directory was found"
+    fi
+  fi
+
+  success "Restore completed"
+
+  rm -rf "$stage_dir"
+  trap - EXIT
+}
+
 self_test() {
   header "Running self-test"
   local tmp
@@ -391,6 +501,11 @@ self_test() {
 main() {
   if $SELF_TEST; then
     self_test
+  fi
+
+  if [[ -n "$RESTORE_ARCHIVE" ]]; then
+    restore_archive "$RESTORE_ARCHIVE"
+    exit 0
   fi
 
   SOURCE_HOME="$(canon_path "$SOURCE_HOME")"

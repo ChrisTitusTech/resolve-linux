@@ -34,6 +34,13 @@ PC. It captures:
 - `~/.local/share/BlackmagicDesign/DaVinci Resolve` (additional user data)
 - `~/.local/share/fonts`, `~/.fonts`, `~/.config/fontconfig` (user fonts/fontconfig)
 
+### Backup Exclusions
+
+The backup intentionally excludes the following inside `/opt/resolve`:
+
+- `/opt/resolve/plugins`
+- `/opt/resolve/LUT`
+
 ### Backup Usage
 
 ```bash
@@ -60,6 +67,31 @@ Skip system font paths (useful for smaller backup/testing):
 ```
 
 The script is verbose by default and validates archive integrity after creation.
+
+### Restore Usage
+
+Restore directly from an archive file:
+
+```bash
+./resolve_backup.sh --restore inputfile.tar.gz
+```
+
+Restore to custom target paths (useful for testing/migration staging):
+
+```bash
+./resolve_backup.sh \
+  --restore inputfile.tar.gz \
+  --restore-home /home/targetuser \
+  --restore-opt /opt \
+  --restore-root /
+```
+
+Restore options summary:
+
+- `-r, --restore FILE` restore from backup archive
+- `--restore-home DIR` restore `payload/home/<user>/...` into `DIR`
+- `--restore-opt DIR` restore `payload/opt/...` into `DIR`
+- `--restore-root DIR` restore `payload/system/...` into `DIR`
 
 ## Requirements
 
