@@ -1,0 +1,4 @@
+#!/bin/bash
+export LD_PRELOAD=/usr/lib/libglib-2.0.so.0:/usr/lib/libgobject-2.0.so.0:/usr/lib/libgio-2.0.so.0:/usr/lib/libgmodule-2.0.so.0
+export LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
+exec /opt/resolve/bin/resolve "$@"
