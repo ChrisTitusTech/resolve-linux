@@ -2,6 +2,9 @@
 
 Batch transcode media to **DaVinci Resolve–friendly formats** on Linux using freely available codecs.
 
+This repository also includes a backup utility for moving DaVinci Resolve setup
+to a new Linux machine, including installation files and custom settings.
+
 ## Overview
 
 `resolve_convert.sh` recursively scans directories, converts all media files to formats optimized for DaVinci Resolve, and preserves your folder structure in the output directory.
@@ -18,6 +21,45 @@ Batch transcode media to **DaVinci Resolve–friendly formats** on Linux using f
 ✅ **Dry-run mode** — preview conversions before committing  
 ✅ **Error handling** — skip existing files, report failures  
 ✅ **Linux-native** — no proprietary software required  
+
+## Resolve Backup Script
+
+Use `resolve_backup.sh` to create a single archive that can be restored on a new
+PC. It captures:
+
+- `/opt/resolve` (application install)
+- `/usr/share/fonts`, `/usr/local/share/fonts`, `/etc/fonts` (system fonts/fontconfig)
+- `~/.local/share/DaVinciResolve` (LUTs, Fusion templates, scripts, macros)
+- `~/.config/Blackmagic Design/DaVinci Resolve` (preferences, hotkeys)
+- `~/.local/share/BlackmagicDesign/DaVinci Resolve` (additional user data)
+- `~/.local/share/fonts`, `~/.fonts`, `~/.config/fontconfig` (user fonts/fontconfig)
+
+### Backup Usage
+
+```bash
+chmod +x resolve_backup.sh
+./resolve_backup.sh --output-dir ~/backups
+```
+
+Dry-run preview:
+
+```bash
+./resolve_backup.sh --dry-run
+```
+
+Run built-in end-to-end self-test:
+
+```bash
+./resolve_backup.sh --self-test
+```
+
+Skip system font paths (useful for smaller backup/testing):
+
+```bash
+./resolve_backup.sh --no-system-fonts
+```
+
+The script is verbose by default and validates archive integrity after creation.
 
 ## Requirements
 
@@ -170,7 +212,7 @@ MIT License — see [LICENSE](LICENSE) for details
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! Please see [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for guidelines.
 
 ## Author
 

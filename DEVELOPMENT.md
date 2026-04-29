@@ -63,15 +63,15 @@ ffmpeg -encoders | grep dnxhr
 resolve-linux/
 ├── resolve_convert.sh          # Main script
 ├── README.md                   # User documentation
-├── CONTRIBUTING.md            # Contribution guidelines
 ├── DEVELOPMENT.md             # This file
 ├── CHANGELOG.md               # Release notes
-├── CODE_OF_CONDUCT.md         # Community standards
-├── SECURITY.md                # Security policy
 ├── LICENSE                    # MIT License
 ├── .gitignore                 # Git ignore patterns
 ├── .editorconfig              # Editor configuration
 └── .github/
+   ├── CONTRIBUTING.md        # Contribution guidelines
+   ├── CODE_OF_CONDUCT.md     # Community standards
+   ├── SECURITY.md            # Security policy
     ├── ISSUE_TEMPLATE/        # Issue templates
     │   ├── bug_report.md
     │   └── feature_request.md
@@ -257,7 +257,7 @@ time ./resolve_convert.sh -j 4 /tmp/large_test
 
 - **README.md** — User-facing documentation
 - **DEVELOPMENT.md** — Developer documentation
-- **CONTRIBUTING.md** — Contribution process
+- **.github/CONTRIBUTING.md** — Contribution process
 - **CHANGELOG.md** — Release notes
 
 ## Useful Commands
@@ -279,8 +279,8 @@ shfmt -i 2 -w resolve_convert.sh
 ## Getting Help
 
 - **Questions:** Open a GitHub Discussion
-- **Bug report:** Check CONTRIBUTING.md
-- **Feature request:** Check CONTRIBUTING.md
+- **Bug report:** Check .github/CONTRIBUTING.md
+- **Feature request:** Check .github/CONTRIBUTING.md
 
 ## Code Review Standards
 
