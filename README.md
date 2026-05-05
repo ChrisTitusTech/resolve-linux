@@ -214,6 +214,28 @@ Preview conversions (dry-run):
 
 ## Troubleshooting
 
+### Fix Missing User Fonts in Resolve
+
+By default, DaVinci Resolve may only resolve fonts from the system font path
+(`/usr/share/fonts`), so fonts installed per-user might not appear.
+
+To include user fonts, update the Fusion font path map:
+
+1. Open **Fusion Settings** in DaVinci Resolve.
+2. Go to **Path Map**.
+3. Find **Fonts:**.
+4. Change the value from:
+
+  `SystemFonts:`
+
+  to:
+
+  `SystemFonts:;$HOME/.local/share/fonts`
+
+5. Save settings and restart DaVinci Resolve.
+
+After restart, Resolve should discover fonts installed in your user font directory.
+
 **"ffmpeg build does not include the DNxHD/DNxHR encoder"**
 - Your ffmpeg build lacks DNxHD support. Reinstall with: `sudo pacman -S ffmpeg` or `sudo apt install ffmpeg`
 
