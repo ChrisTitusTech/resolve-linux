@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# fix-fedora-resolve
+# Fixes DaVinci Resolve on current Fedora when Resolve's bundled old GLib stack
+# conflicts with Fedora's system Pango/GLib libraries.
+#
+# Main fix:
+#   Move Resolve's bundled libglib/libgio/libgobject/libgmodule/libgthread
+#   out of /opt/resolve/libs so Resolve uses Fedora's system GLib stack.
+#
+# Usage:
+#   fix-fedora-resolve
+#   fix-fedora-resolve --launch
+#   fix-fedora-resolve --dry-run
+#   fix-fedora-resolve --restore
+#   fix-fedora-resolve --check-only
+#   fix-fedora-resolve --fix-system
+
+RESOLVE_ROOT="/opt/resolve"
+RESOLVE_LIBS="$RESOLVE_ROOT/libs"
+RESOLVE_BIN="$RESOLVE_ROOT/bin/resolve"
+DISABLED_ROOT="$RESOLVE_LIBS/disabled-libraries"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$DISABLED_ROOT/fix-fedora-resolve-$STAMP"
+
+DRY_RUN=0
+LAUNCH=0
+RESTORE=0
+CHECK_ONLY=0
+FIX_SYSTEM=0
+
+log() {
+  printf '[fix-fedora-resolve] %s\n' "$*"
+}
+
+warn() {
+  printf '[fix-fedora-resolve] WARNING: %s\n' "$*" >&2
+}
+
+die() {
+  printf '[fix-fedora-resolve] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+run() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '[dry-run] '
+    printf '%q ' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+usage() {
+  cat <<USAGE
+Usage:
+  fix-fedora-resolve [options]
+
+Options:
+  --dry-run       Show what would be changed, but do not move files
+  --launch        Launch DaVinci Resolve after applying the fix
+  --restore       Restore the newest fix-fedora-resolve backup
+  --check-only    Only show diagnostics; do not change anything
+  --fix-system    If Fedora GLib/Pango look broken, run dnf refresh/reinstall
+  -h, --help      Show this help
+
+What this script does:
+  1. Checks Fedora glib2/pango package versions.
+  2. Verifies /lib64/libglib-2.0.so.0 exports g_once_init_leave_pointer.
+  3. Finds Resolve-bundled old GLib-family libraries.
+  4. Moves them to:
+       /opt/resolve/libs/disabled-libraries/fix-fedora-resolve-<timestamp>/
+  5. Runs ldconfig.
+  6. Optionally launches /opt/resolve/bin/resolve.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      ;;
+    --launch)
+      LAUNCH=1
+      ;;
+    --restore)
+      RESTORE=1
+      ;;
+    --check-only)
+      CHECK_ONLY=1
+      ;;
+    --fix-system)
+      FIX_SYSTEM=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
+need_path() {
+  [[ -e "$1" ]] || die "Missing required path: $1"
+}
+
+sudo_cmd() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+sudo_run() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      printf '[dry-run] '
+      printf '%q ' "$@"
+      printf '\n'
+    else
+      printf '[dry-run] sudo '
+      printf '%q ' "$@"
+      printf '\n'
+    fi
+  else
+    sudo_cmd "$@"
+  fi
+}
+
+print_system_info() {
+  log "System package check:"
+  if command -v rpm >/dev/null 2>&1; then
+    rpm -q glib2 pango || true
+  else
+    warn "rpm not found; cannot query Fedora packages."
+  fi
+
+  log "System GLib symbol check:"
+  if [[ -e /lib64/libglib-2.0.so.0 ]]; then
+    if command -v objdump >/dev/null 2>&1; then
+      if objdump -T /lib64/libglib-2.0.so.0 | grep -q 'g_once_init_leave_pointer'; then
+        log "OK: /lib64/libglib-2.0.so.0 exports g_once_init_leave_pointer"
+      else
+        warn "BAD: /lib64/libglib-2.0.so.0 does not export g_once_init_leave_pointer"
+        warn "Your Fedora glib2/pango packages may be mismatched or broken."
+        return 2
+      fi
+    else
+      warn "objdump not found; install binutils if you want symbol verification."
+    fi
+  else
+    warn "Missing /lib64/libglib-2.0.so.0"
+    return 2
+  fi
+
+  return 0
+}
+
+fix_system_packages() {
+  if [[ "$FIX_SYSTEM" -ne 1 ]]; then
+    warn "System GLib check failed. Re-run with --fix-system to refresh/reinstall glib2 and pango."
+    return 0
+  fi
+
+  command -v dnf >/dev/null 2>&1 || die "dnf not found; cannot fix system packages."
+
+  log "Refreshing and reinstalling Fedora glib2/pango packages..."
+  sudo_run dnf upgrade --refresh -y glib2 pango
+  sudo_run dnf reinstall -y glib2 pango
+  sudo_run ldconfig
+
+  log "Rechecking system GLib symbol..."
+  print_system_info || die "System GLib still does not look correct after package repair."
+}
+
+find_resolve_glib_libs() {
+  find "$RESOLVE_LIBS" -maxdepth 1 \
+    \( -type f -o -type l \) \
+    \( -name 'libglib-2.0.so*' \
+    -o -name 'libgio-2.0.so*' \
+    -o -name 'libgobject-2.0.so*' \
+    -o -name 'libgmodule-2.0.so*' \
+    -o -name 'libgthread-2.0.so*' \) \
+    -print | sort
+}
+
+show_resolve_libs() {
+  log "Resolve-bundled GLib-family libraries currently in $RESOLVE_LIBS:"
+  local libs
+  libs="$(find_resolve_glib_libs || true)"
+
+  if [[ -z "$libs" ]]; then
+    log "None found. Resolve should already be using Fedora's system GLib stack."
+  else
+    printf '%s\n' "$libs"
+  fi
+}
+
+apply_fix() {
+  need_path "$RESOLVE_ROOT"
+  need_path "$RESOLVE_LIBS"
+  need_path "$RESOLVE_BIN"
+
+  local libs
+  libs="$(find_resolve_glib_libs || true)"
+
+  if [[ -z "$libs" ]]; then
+    log "No Resolve-bundled GLib-family libraries found in active library path."
+    return 0
+  fi
+
+  log "Moving Resolve-bundled GLib-family libraries out of the active loader path..."
+  sudo_run mkdir -p "$BACKUP_DIR"
+
+  while IFS= read -r lib; do
+    [[ -n "$lib" ]] || continue
+    sudo_run mv -v "$lib" "$BACKUP_DIR/"
+  done <<< "$libs"
+
+  sudo_run ldconfig
+
+  log "Moved libraries to:"
+  log "$BACKUP_DIR"
+
+  log "Post-fix verification:"
+  show_resolve_libs
+}
+
+restore_latest() {
+  need_path "$DISABLED_ROOT"
+
+  local latest
+  latest="$(find "$DISABLED_ROOT" -maxdepth 1 -type d -name 'fix-fedora-resolve-*' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR==1 {print $2}')"
+
+  [[ -n "${latest:-}" ]] || die "No fix-fedora-resolve backup directory found under $DISABLED_ROOT"
+
+  log "Restoring newest backup:"
+  log "$latest"
+
+  local files
+  files="$(find "$latest" -maxdepth 1 \( -type f -o -type l \) -print | sort || true)"
+  [[ -n "$files" ]] || die "Backup directory is empty: $latest"
+
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    sudo_run mv -v "$file" "$RESOLVE_LIBS/"
+  done <<< "$files"
+
+  sudo_run ldconfig
+  log "Restore complete."
+}
+
+launch_resolve() {
+  need_path "$RESOLVE_BIN"
+
+  log "Launching DaVinci Resolve as current user..."
+  exec "$RESOLVE_BIN"
+}
+
+main() {
+  need_path "$RESOLVE_ROOT"
+  need_path "$RESOLVE_LIBS"
+
+  if [[ "$RESTORE" -eq 1 ]]; then
+    restore_latest
+    exit 0
+  fi
+
+  local system_check_rc=0
+  print_system_info || system_check_rc=$?
+
+  if [[ "$system_check_rc" -ne 0 ]]; then
+    fix_system_packages
+  fi
+
+  show_resolve_libs
+
+  if [[ "$CHECK_ONLY" -eq 1 ]]; then
+    log "Check-only mode complete. No changes made."
+    exit 0
+  fi
+
+  apply_fix
+
+  if [[ "$LAUNCH" -eq 1 ]]; then
+    launch_resolve
+  fi
+
+  log "Done. Test with:"
+  log "  /opt/resolve/bin/resolve"
+}
+
+main "$@"
