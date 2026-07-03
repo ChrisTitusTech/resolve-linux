@@ -69,11 +69,13 @@ Options:
 What this script does:
   1. Checks Fedora glib2/pango package versions.
   2. Verifies /lib64/libglib-2.0.so.0 exports g_once_init_leave_pointer.
-  3. Finds Resolve-bundled old GLib-family libraries.
-  4. Moves them to:
+  3. Checks Resolve for missing host shared-library dependencies.
+  4. Installs known missing Fedora dependency packages before changing Resolve.
+  5. Finds Resolve-bundled old GLib-family libraries.
+  6. Moves them to:
        /opt/resolve/libs/disabled-libraries/fix-fedora-resolve-<timestamp>/
-  5. Runs ldconfig.
-  6. Optionally launches /opt/resolve/bin/resolve.
+  7. Runs ldconfig.
+  8. Optionally launches /opt/resolve/bin/resolve.
 USAGE
 }
 
@@ -179,6 +181,111 @@ fix_system_packages() {
   print_system_info || die "System GLib still does not look correct after package repair."
 }
 
+find_missing_resolve_libs() {
+  LC_ALL=C ldd "$RESOLVE_BIN" 2>/dev/null | awk '/=> not found/ {print $1}' | sort -u
+}
+
+fedora_package_for_lib() {
+  case "$1" in
+    libGLU.so.1)
+      printf '%s\n' "mesa-libGLU"
+      ;;
+    libcrypt.so.1)
+      printf '%s\n' "libxcrypt-compat"
+      ;;
+  esac
+}
+
+resolve_missing_dependency_packages() {
+  local missing_libs
+  missing_libs="$(find_missing_resolve_libs || true)"
+
+  [[ -n "$missing_libs" ]] || return 0
+
+  local lib package
+  while IFS= read -r lib; do
+    [[ -n "$lib" ]] || continue
+    package="$(fedora_package_for_lib "$lib")"
+    [[ -n "$package" ]] || continue
+    printf '%s\n' "$package"
+  done <<< "$missing_libs" | sort -u
+}
+
+show_resolve_host_deps() {
+  need_path "$RESOLVE_BIN"
+
+  log "Resolve host dependency check:"
+
+  local missing_libs
+  missing_libs="$(find_missing_resolve_libs || true)"
+
+  if [[ -z "$missing_libs" ]]; then
+    log "OK: no missing shared libraries reported by ldd."
+    return 0
+  fi
+
+  warn "Resolve is missing host shared libraries:"
+  printf '%s\n' "$missing_libs" >&2
+
+  local packages
+  packages="$(resolve_missing_dependency_packages || true)"
+
+  if [[ -n "$packages" ]]; then
+    warn "Known Fedora packages needed:"
+    printf '%s\n' "$packages" >&2
+  fi
+
+  return 1
+}
+
+install_resolve_host_deps() {
+  local missing_libs
+  missing_libs="$(find_missing_resolve_libs || true)"
+
+  [[ -n "$missing_libs" ]] || return 0
+
+  local packages unknown_libs lib package
+  packages=""
+  unknown_libs=""
+
+  while IFS= read -r lib; do
+    [[ -n "$lib" ]] || continue
+
+    package="$(fedora_package_for_lib "$lib")"
+    if [[ -n "$package" ]]; then
+      packages="${packages}${package}"$'\n'
+    else
+      unknown_libs="${unknown_libs}${lib}"$'\n'
+    fi
+  done <<< "$missing_libs"
+
+  if [[ -n "$unknown_libs" ]]; then
+    warn "Resolve has missing libraries with no package mapping in this script:"
+    printf '%s' "$unknown_libs" >&2
+    die "Install those dependencies manually or update the script mapping before moving Resolve libraries."
+  fi
+
+  packages="$(printf '%s' "$packages" | sort -u)"
+  [[ -n "$packages" ]] || return 0
+
+  command -v dnf >/dev/null 2>&1 || die "dnf not found; cannot install missing Resolve host dependencies."
+
+  log "Installing missing Fedora packages required by Resolve..."
+  while IFS= read -r package; do
+    [[ -n "$package" ]] || continue
+    sudo_run dnf install -y "$package"
+  done <<< "$packages"
+
+  sudo_run ldconfig
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+
+  log "Rechecking Resolve host dependencies..."
+  show_resolve_host_deps || die "Resolve still has missing host dependencies after package installation."
+}
+
 find_resolve_glib_libs() {
   find "$RESOLVE_LIBS" -maxdepth 1 \
     \( -type f -o -type l \) \
@@ -279,11 +386,18 @@ main() {
     fix_system_packages
   fi
 
+  local missing_deps_rc=0
+  show_resolve_host_deps || missing_deps_rc=$?
+
   show_resolve_libs
 
   if [[ "$CHECK_ONLY" -eq 1 ]]; then
     log "Check-only mode complete. No changes made."
     exit 0
+  fi
+
+  if [[ "$missing_deps_rc" -ne 0 ]]; then
+    install_resolve_host_deps
   fi
 
   apply_fix
