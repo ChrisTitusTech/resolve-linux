@@ -17,6 +17,28 @@ set -Eeuo pipefail
 #   fix-fedora-resolve --check-only
 #   fix-fedora-resolve --fix-system
 
+FEDORA_MULTIMEDIA_PACKAGES=(
+  ffmpeg
+  ffmpeg-libs
+  gstreamer1-plugin-libav
+  gstreamer1-plugins-bad-free
+  gstreamer1-plugins-bad-free-extras
+  gstreamer1-plugins-bad-freeworld
+  gstreamer1-plugins-good
+  gstreamer1-plugins-good-extras
+  gstreamer1-plugins-ugly
+  intel-media-driver
+  libva-utils
+  mesa-va-drivers-freeworld
+)
+
+GSTREAMER_REQUIRED_ELEMENTS=(
+  qtdemux
+  h264parse
+  avdec_h264
+  opusdec
+)
+
 RESOLVE_ROOT="/opt/resolve"
 RESOLVE_LIBS="$RESOLVE_ROOT/libs"
 RESOLVE_BIN="$RESOLVE_ROOT/bin/resolve"
@@ -69,13 +91,15 @@ Options:
 What this script does:
   1. Checks Fedora glib2/pango package versions.
   2. Verifies /lib64/libglib-2.0.so.0 exports g_once_init_leave_pointer.
-  3. Checks Resolve for missing host shared-library dependencies.
-  4. Installs known missing Fedora dependency packages before changing Resolve.
-  5. Finds Resolve-bundled old GLib-family libraries.
-  6. Moves them to:
+  3. Checks Fedora FFmpeg/GStreamer video encode/decode support.
+  4. Installs known missing Fedora multimedia dependency packages.
+  5. Checks Resolve for missing host shared-library dependencies.
+  6. Installs known missing Fedora dependency packages before changing Resolve.
+  7. Finds Resolve-bundled old GLib-family libraries.
+  8. Moves them to:
        /opt/resolve/libs/disabled-libraries/fix-fedora-resolve-<timestamp>/
-  7. Runs ldconfig.
-  8. Optionally launches /opt/resolve/bin/resolve.
+  9. Runs ldconfig.
+  10. Optionally launches /opt/resolve/bin/resolve.
 USAGE
 }
 
@@ -146,7 +170,7 @@ print_system_info() {
   log "System GLib symbol check:"
   if [[ -e /lib64/libglib-2.0.so.0 ]]; then
     if command -v objdump >/dev/null 2>&1; then
-      if objdump -T /lib64/libglib-2.0.so.0 | grep -q 'g_once_init_leave_pointer'; then
+      if objdump -T /lib64/libglib-2.0.so.0 | awk '$NF == "g_once_init_leave_pointer" {found = 1} END {exit !found}'; then
         log "OK: /lib64/libglib-2.0.so.0 exports g_once_init_leave_pointer"
       else
         warn "BAD: /lib64/libglib-2.0.so.0 does not export g_once_init_leave_pointer"
@@ -181,6 +205,71 @@ fix_system_packages() {
   print_system_info || die "System GLib still does not look correct after package repair."
 }
 
+show_multimedia_info() {
+  log "Fedora multimedia package check:"
+
+  local missing=0
+
+  if ! command -v rpm >/dev/null 2>&1; then
+    warn "rpm not found; cannot query Fedora multimedia packages."
+  else
+    local package
+    for package in "${FEDORA_MULTIMEDIA_PACKAGES[@]}"; do
+      if rpm -q "$package"; then
+        :
+      else
+        missing=1
+      fi
+    done
+  fi
+
+  log "GStreamer decode element check:"
+  if ! command -v gst-inspect-1.0 >/dev/null 2>&1; then
+    warn "gst-inspect-1.0 not found; install gstreamer1 if desktop video playback is broken."
+    return 1
+  fi
+
+  local element
+  for element in "${GSTREAMER_REQUIRED_ELEMENTS[@]}"; do
+    if gst-inspect-1.0 "$element" >/dev/null 2>&1; then
+      log "OK: GStreamer element available: $element"
+    else
+      warn "Missing GStreamer element: $element"
+      missing=1
+    fi
+  done
+
+  return "$missing"
+}
+
+install_fedora_multimedia_deps() {
+  command -v dnf >/dev/null 2>&1 || die "dnf not found; cannot install Fedora multimedia dependencies."
+
+  local missing_packages=()
+  local package
+
+  for package in "${FEDORA_MULTIMEDIA_PACKAGES[@]}"; do
+    if ! rpm -q "$package" >/dev/null 2>&1; then
+      missing_packages+=("$package")
+    fi
+  done
+
+  if [[ "${#missing_packages[@]}" -eq 0 ]]; then
+    log "Fedora multimedia package set is already installed."
+  else
+    log "Installing missing Fedora multimedia encode/decode packages..."
+    sudo_run dnf install -y "${missing_packages[@]}"
+    sudo_run ldconfig
+  fi
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+
+  log "Rechecking Fedora multimedia support..."
+  show_multimedia_info || die "Fedora multimedia support is still incomplete after package installation."
+}
+
 find_missing_resolve_libs() {
   LC_ALL=C ldd "$RESOLVE_BIN" 2>/dev/null | awk '/=> not found/ {print $1}' | sort -u
 }
@@ -189,11 +278,21 @@ fedora_package_for_lib() {
   case "$1" in
     libGLU.so.1)
       printf '%s\n' "mesa-libGLU"
+      return 0
       ;;
     libcrypt.so.1)
       printf '%s\n' "libxcrypt-compat"
+      return 0
       ;;
   esac
+
+  if command -v dnf >/dev/null 2>&1; then
+    dnf repoquery --quiet --whatprovides "*/$1" --queryformat '%{name} %{arch}' 2>/dev/null \
+      | awk '$2 == "x86_64" && found == "" {package = $1; found = 1} END {if (found) {print package} else {exit 1}}'
+    return $?
+  fi
+
+  return 1
 }
 
 resolve_missing_dependency_packages() {
@@ -386,6 +485,9 @@ main() {
     fix_system_packages
   fi
 
+  local multimedia_deps_rc=0
+  show_multimedia_info || multimedia_deps_rc=$?
+
   local missing_deps_rc=0
   show_resolve_host_deps || missing_deps_rc=$?
 
@@ -394,6 +496,10 @@ main() {
   if [[ "$CHECK_ONLY" -eq 1 ]]; then
     log "Check-only mode complete. No changes made."
     exit 0
+  fi
+
+  if [[ "$multimedia_deps_rc" -ne 0 ]]; then
+    install_fedora_multimedia_deps
   fi
 
   if [[ "$missing_deps_rc" -ne 0 ]]; then
