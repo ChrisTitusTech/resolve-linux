@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# intel-b70-drivers
+# Installs Fedora 44 Intel Arc/B-series graphics, compute, media, and common
+# DaVinci Resolve host dependencies needed for Intel B70-class GPUs.
+
+SCRIPT_NAME="intel-b70-drivers"
+FEDORA_VERSION="44"
+
+DRY_RUN=0
+CHECK_ONLY=0
+FORCE=0
+LAUNCH=0
+
+INTEL_PACKAGES=(
+  intel-compute-runtime
+  intel-level-zero
+  intel-opencl
+  intel-vpl-gpu-rt
+  libva-intel-media-driver
+  libva-utils
+  libvpl
+  mesa-dri-drivers
+  mesa-vulkan-drivers
+  vulkan-loader
+  vulkan-tools
+)
+
+RESOLVE_HOST_PACKAGES=(
+  alsa-lib
+  apr
+  apr-util
+  bzip2-libs
+  dbus-libs
+  expat
+  fontconfig
+  freetype
+  glib2
+  libX11
+  libXScrnSaver
+  libXcomposite
+  libXcursor
+  libXdamage
+  libXext
+  libXfixes
+  libXi
+  libXinerama
+  libXrandr
+  libXrender
+  libXtst
+  libXxf86vm
+  libdrm
+  libglvnd
+  libglvnd-egl
+  libglvnd-glx
+  libglvnd-opengl
+  libpng
+  libuuid
+  libxcb
+  libxcrypt-compat
+  libxkbcommon
+  libxkbcommon-x11
+  mesa-libGLU
+  mtdev
+  OpenCL-ICD-Loader
+  pciutils
+  pulseaudio-libs
+  xcb-util
+  xcb-util-image
+  xcb-util-keysyms
+  xcb-util-renderutil
+  xcb-util-wm
+  zlib-ng-compat
+)
+
+DIAGNOSTIC_PACKAGES=(
+  clinfo
+)
+
+log() {
+  printf '[%s] %s\n' "$SCRIPT_NAME" "$*"
+}
+
+warn() {
+  printf '[%s] WARNING: %s\n' "$SCRIPT_NAME" "$*" >&2
+}
+
+die() {
+  printf '[%s] ERROR: %s\n' "$SCRIPT_NAME" "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<USAGE
+Usage:
+  $SCRIPT_NAME [options]
+
+Options:
+  --dry-run       Show commands without changing the system
+  --check-only    Run system and Resolve checks without installing packages
+  --force         Continue on non-Fedora-$FEDORA_VERSION systems
+  --launch        Launch /opt/resolve/bin/resolve after install and checks
+  -h, --help      Show this help
+
+What this script does:
+  1. Verifies this is Fedora $FEDORA_VERSION x86_64, unless --force is used.
+  2. Checks for a visible Intel VGA/3D/display controller.
+  3. Verifies Fedora packages are available before install.
+  4. Installs Intel OpenCL, Level Zero, oneVPL, VAAPI, Vulkan, and Mesa runtime packages.
+  5. Installs common DaVinci Resolve host-library dependencies for a fresh Fedora install.
+  6. Runs ldconfig and prints verification commands/results for Resolve use.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --dry-run)
+    DRY_RUN=1
+    ;;
+  --check-only)
+    CHECK_ONLY=1
+    ;;
+  --force)
+    FORCE=1
+    ;;
+  --launch)
+    LAUNCH=1
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    die "Unknown option: $1"
+    ;;
+  esac
+  shift
+done
+
+sudo_cmd() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  else
+    command -v sudo >/dev/null 2>&1 || die "sudo is required when not running as root."
+    sudo "$@"
+  fi
+}
+
+sudo_run() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      printf '[dry-run] '
+    else
+      printf '[dry-run] sudo '
+    fi
+    printf '%q ' "$@"
+    printf '\n'
+  else
+    sudo_cmd "$@"
+  fi
+}
+
+run() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '[dry-run] '
+    printf '%q ' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+check_fedora_version() {
+  [[ -r /etc/os-release ]] || die "Cannot read /etc/os-release."
+
+  # shellcheck disable=SC1091
+  source /etc/os-release
+
+  if [[ "${ID:-}" != "fedora" || "${VERSION_ID:-}" != "$FEDORA_VERSION" ]]; then
+    if [[ "$FORCE" -eq 1 ]]; then
+      warn "Expected Fedora $FEDORA_VERSION, found ${PRETTY_NAME:-unknown}; continuing because --force was used."
+      return 0
+    fi
+    die "Expected Fedora $FEDORA_VERSION, found ${PRETTY_NAME:-unknown}. Use --force to continue anyway."
+  fi
+
+  log "OK: ${PRETTY_NAME:-Fedora $FEDORA_VERSION}"
+}
+
+check_architecture() {
+  local arch
+  arch="$(uname -m)"
+
+  if [[ "$arch" != "x86_64" ]]; then
+    die "Expected x86_64. Found: $arch"
+  fi
+
+  log "OK: x86_64 architecture"
+}
+
+check_dnf() {
+  command -v dnf >/dev/null 2>&1 || die "dnf was not found."
+  log "OK: dnf is available"
+}
+
+has_intel_display_controller() {
+  command -v lspci >/dev/null 2>&1 || return 2
+  lspci -Dnn | grep -Eiq 'VGA|3D|Display' && lspci -Dnn | grep -Eiq 'VGA|3D|Display.*Intel|Intel.*(VGA|3D|Display)'
+}
+
+show_intel_gpu_info() {
+  log "Intel display controller check:"
+
+  if ! command -v lspci >/dev/null 2>&1; then
+    warn "lspci is not installed yet; pciutils will be installed."
+    return 0
+  fi
+
+  local gpu_lines
+  gpu_lines="$(lspci -Dnn | grep -Ei 'VGA|3D|Display' | grep -Ei 'Intel|8086' || true)"
+
+  if [[ -z "$gpu_lines" ]]; then
+    warn "No Intel VGA/3D/display controller was detected."
+    warn "Install can continue, but Resolve will not see an Intel GPU until hardware is present and enabled."
+    return 1
+  fi
+
+  printf '%s\n' "$gpu_lines"
+}
+
+package_installed() {
+  rpm -q "$1" >/dev/null 2>&1
+}
+
+package_available() {
+  local package="$1"
+
+  package_installed "$package" && return 0
+  dnf -q repoquery --available "$package" >/dev/null 2>&1
+}
+
+unique_packages() {
+  printf '%s\n' "$@" | awk 'NF && !seen[$0]++'
+}
+
+check_package_availability() {
+  log "Checking Fedora package availability..."
+
+  local missing=()
+  local package
+  while IFS= read -r package; do
+    [[ -n "$package" ]] || continue
+    if ! package_available "$package"; then
+      missing+=("$package")
+    fi
+  done < <(unique_packages "${INTEL_PACKAGES[@]}" "${RESOLVE_HOST_PACKAGES[@]}" "${DIAGNOSTIC_PACKAGES[@]}")
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    printf '%s\n' "${missing[@]}" >&2
+    die "Some required packages are unavailable from enabled Fedora repositories."
+  fi
+
+  log "OK: required packages are available from enabled repositories"
+}
+
+install_packages() {
+  local packages=()
+  local package
+
+  while IFS= read -r package; do
+    [[ -n "$package" ]] || continue
+    if ! package_installed "$package"; then
+      packages+=("$package")
+    fi
+  done < <(unique_packages "${INTEL_PACKAGES[@]}" "${RESOLVE_HOST_PACKAGES[@]}" "${DIAGNOSTIC_PACKAGES[@]}")
+
+  if [[ "${#packages[@]}" -eq 0 ]]; then
+    log "All target packages are already installed."
+    return 0
+  fi
+
+  log "Installing ${#packages[@]} package(s)..."
+  sudo_run dnf install -y "${packages[@]}"
+  sudo_run ldconfig
+}
+
+resolve_bin() {
+  printf '%s\n' "/opt/resolve/bin/resolve"
+}
+
+show_resolve_dependency_check() {
+  local bin
+  bin="$(resolve_bin)"
+
+  log "DaVinci Resolve host dependency check:"
+
+  if [[ ! -x "$bin" ]]; then
+    warn "$bin is not installed or is not executable."
+    warn "Install DaVinci Resolve, then re-run this script to check Resolve's linked libraries."
+    return 0
+  fi
+
+  local missing
+  missing="$(LC_ALL=C ldd "$bin" 2>/dev/null | awk '/=> not found/ {print $1}' | sort -u || true)"
+
+  if [[ -z "$missing" ]]; then
+    log "OK: no missing shared libraries reported by ldd for $bin"
+    return 0
+  fi
+
+  warn "Resolve still has missing shared libraries:"
+  printf '%s\n' "$missing" >&2
+  return 1
+}
+
+check_render_permissions() {
+  log "Render device permission check:"
+
+  if compgen -G "/dev/dri/renderD*" >/dev/null; then
+    ls -l /dev/dri/renderD* || true
+  else
+    warn "No /dev/dri/renderD* device found. Reboot after installing updates, then check BIOS/PCIe/GPU visibility."
+    return 1
+  fi
+
+  if id -nG "${SUDO_USER:-$USER}" | tr ' ' '\n' | grep -qx render; then
+    log "OK: ${SUDO_USER:-$USER} is in the render group"
+  else
+    warn "${SUDO_USER:-$USER} is not in the render group."
+    warn "If Resolve cannot access the GPU, run: sudo usermod -aG render ${SUDO_USER:-$USER}"
+  fi
+}
+
+run_verification() {
+  log "Verification:"
+
+  if command -v clinfo >/dev/null 2>&1; then
+    log "OpenCL platforms:"
+    clinfo -l || true
+  else
+    warn "clinfo is unavailable."
+  fi
+
+  if command -v vainfo >/dev/null 2>&1; then
+    log "VAAPI driver check:"
+    LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128 2>/dev/null | sed -n '1,20p' || warn "vainfo failed. Reboot and recheck /dev/dri/renderD* if the GPU was just installed."
+  else
+    warn "vainfo is unavailable."
+  fi
+
+  if command -v vulkaninfo >/dev/null 2>&1; then
+    log "Vulkan device summary:"
+    vulkaninfo --summary 2>/dev/null | sed -n '/Devices:/,$p' || warn "vulkaninfo failed."
+  else
+    warn "vulkaninfo is unavailable."
+  fi
+}
+
+launch_resolve() {
+  local bin
+  bin="$(resolve_bin)"
+  [[ -x "$bin" ]] || die "$bin is not installed or is not executable."
+
+  log "Launching DaVinci Resolve..."
+  exec "$bin"
+}
+
+main() {
+  check_fedora_version
+  check_architecture
+  check_dnf
+  show_intel_gpu_info || true
+
+  if [[ "$CHECK_ONLY" -eq 1 ]]; then
+    show_resolve_dependency_check || true
+    check_render_permissions || true
+    run_verification
+    log "Check-only mode complete. No packages were installed."
+    exit 0
+  fi
+
+  check_package_availability
+  install_packages
+  show_intel_gpu_info || true
+  show_resolve_dependency_check || true
+  check_render_permissions || true
+  run_verification
+
+  log "Done. Reboot before launching Resolve if the Intel GPU or kernel packages were just installed."
+
+  if [[ "$LAUNCH" -eq 1 ]]; then
+    launch_resolve
+  fi
+}
+
+main "$@"
