@@ -167,14 +167,18 @@ check_deps() {
 get_media_type() {
   local file="$1"
   local has_video has_audio
-  has_video=$(ffprobe -v quiet -select_streams v:0 \
-    -show_entries stream=codec_type -of csv=p=0 "$file" 2>/dev/null | head -1)
-  has_audio=$(ffprobe -v quiet -select_streams a:0 \
-    -show_entries stream=codec_type -of csv=p=0 "$file" 2>/dev/null | head -1)
+  has_video=$(ffprobe -v error -select_streams v:0 \
+    -show_entries stream=codec_type \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$file" 2>/dev/null | head -1)
+  has_audio=$(ffprobe -v error -select_streams a:0 \
+    -show_entries stream=codec_type \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$file" 2>/dev/null | head -1)
 
-  if [[ "$has_video" == "video" ]]; then
+  if [[ "$has_video" == *video* ]]; then
     echo "video"
-  elif [[ "$has_audio" == "audio" ]]; then
+  elif [[ "$has_audio" == *audio* ]]; then
     echo "audio"
   else
     echo "unknown"
