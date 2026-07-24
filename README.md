@@ -179,7 +179,7 @@ Preview conversions (dry-run):
 
 **Codec:** PCM (signed 24-bit linear)  
 **Sample Rate:** 48 kHz (Resolve standard)  
-**Channels:** Stereo  
+**Channels:** Preserved from source  
 **Container:** WAV  
 
 ## Folder Structure Example
