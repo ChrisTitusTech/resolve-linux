@@ -170,8 +170,8 @@ Preview conversions (dry-run):
 | `lb` | DNxHR LB | ~100 Mbps | Proxy/offline editing |
 | `sq` | DNxHR SQ | ~220 Mbps | Standard quality |
 | `hq` | DNxHR HQ | ~440 Mbps | High quality (default) |
-| `hqx` | DNxHR HQX | ~660 Mbps | 12-bit, high quality |
-| `444` | DNxHR 444 | ~880 Mbps | 4:4:4, maximum quality |
+| `hqx` | DNxHR HQX | ~660 Mbps | 10-bit 4:2:2, high quality |
+| `444` | DNxHR 444 | ~880 Mbps | 10-bit 4:4:4, maximum quality |
 
 **Container:** QuickTime (.mov) — native support in Resolve
 

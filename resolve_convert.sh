@@ -71,8 +71,8 @@ ${BOLD}resolve_convert.sh${RESET} — Batch transcode for DaVinci Resolve on Lin
                   lb   = DNxHR LB  ~  low bitrate, offline/proxy editing
                   sq   = DNxHR SQ  ~  standard quality
                   hq   = DNxHR HQ  ~  high quality             [DEFAULT]
-                  hqx  = DNxHR HQX ~  high quality, 12-bit
-                  444  = DNxHR 444 ~  full 4:4:4, maximum quality
+                  hqx  = DNxHR HQX ~  high quality, 10-bit 4:2:2
+                  444  = DNxHR 444 ~  10-bit 4:4:4, maximum quality
     -j N        Parallel conversion jobs  (default: 1, requires GNU parallel)
     -n          Dry-run — show what would be converted, do nothing
     -h          Show this help
@@ -231,8 +231,10 @@ convert_video() {
   fi
 
   pix_fmt="yuv422p"
-  [[ "$QUALITY" == "hqx" ]] && pix_fmt="yuv422p12le"
-  [[ "$QUALITY" == "444" ]] && pix_fmt="yuv444p12le"
+  # dnxhd encoder accepts 8-bit or 10-bit only; 12-bit is silently
+  # downgraded. LB/SQ/HQ are 8-bit profiles, HQX/444 are 10-bit.
+  [[ "$QUALITY" == "hqx" ]] && pix_fmt="yuv422p10le"
+  [[ "$QUALITY" == "444" ]] && pix_fmt="yuv444p10le"
 
   if ffmpeg -hide_banner -loglevel error -stats \
       -i "$input" \
