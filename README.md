@@ -151,7 +151,7 @@ Custom output location:
 ./resolve_convert.sh -o /mnt/edit /mnt/raw
 ```
 
-High quality (12-bit) with 2 parallel jobs:
+High quality (10-bit) with 2 parallel jobs:
 ```bash
 ./resolve_convert.sh -q hqx -j 2 /mnt/raw
 ```
