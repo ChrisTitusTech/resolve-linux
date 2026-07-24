@@ -81,7 +81,7 @@ ${BOLD}resolve_convert.sh${RESET} — Batch transcode for DaVinci Resolve on Lin
     $0                          # Convert everything in current dir
     $0 /mnt/footage             # Convert a specific folder
     $0 -o /mnt/edit /mnt/raw   # Custom output location
-    $0 -q hqx -j 2 /mnt/raw   # 12-bit quality, 2 parallel jobs
+    $0 -q hqx -j 2 /mnt/raw   # 10-bit quality, 2 parallel jobs
     $0 -n .                    # Dry-run to preview what will be converted
 
   ${BOLD}OUTPUT FORMATS${RESET}
