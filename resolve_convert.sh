@@ -166,15 +166,19 @@ check_deps() {
 # ── Detect video or audio via stream inspection ───────────────────────────────
 get_media_type() {
   local file="$1"
-  local has_video has_audio
-  has_video=$(ffprobe -v quiet -select_streams v:0 \
-    -show_entries stream=codec_type -of csv=p=0 "$file" 2>/dev/null | head -1)
-  has_audio=$(ffprobe -v quiet -select_streams a:0 \
-    -show_entries stream=codec_type -of csv=p=0 "$file" 2>/dev/null | head -1)
+  local video_count audio_count
+  # Count streams rather than matching ffprobe's formatted output: files
+  # carrying HEVC SEI side data make some writers emit a phantom trailing
+  # field (e.g. "video," instead of "video"), so a count is immune to
+  # writer formatting quirks that a string/value comparison is not.
+  video_count=$(ffprobe -v quiet -select_streams v -show_entries stream=index \
+    -of csv=p=0 "$file" 2>/dev/null | wc -l)
+  audio_count=$(ffprobe -v quiet -select_streams a -show_entries stream=index \
+    -of csv=p=0 "$file" 2>/dev/null | wc -l)
 
-  if [[ "$has_video" == "video" ]]; then
+  if (( video_count > 0 )); then
     echo "video"
-  elif [[ "$has_audio" == "audio" ]]; then
+  elif (( audio_count > 0 )); then
     echo "audio"
   else
     echo "unknown"
