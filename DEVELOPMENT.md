@@ -238,7 +238,7 @@ time ./resolve_convert.sh -j 4 /tmp/large_test
 2. **Manual ffmpeg conversion:**
    ```bash
    ffmpeg -i input.mp4 -c:v dnxhd -profile:v dnxhr_hq \
-     -pix_fmt yuv422p -c:a pcm_s24le -ar 48000 -ac 2 output.mov
+     -pix_fmt yuv422p -map 0:v:0 -map "0:a?" -c:a pcm_s24le -ar 48000 output.mov
    ```
 
 3. **Enable verbose mode in script:**

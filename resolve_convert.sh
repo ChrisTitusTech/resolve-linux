@@ -238,7 +238,8 @@ convert_video() {
       -i "$input" \
       -c:v dnxhd -profile:v "$profile" \
       -pix_fmt "$pix_fmt" \
-      -c:a pcm_s24le -ar 48000 -ac 2 \
+      -map 0:v:0 -map "0:a?" \
+      -c:a pcm_s24le -ar 48000 \
       -movflags write_colr \
       -y "$output" 2>&1; then
     success "Done: ${output#"$SEARCH_PATH/"}"
